@@ -1,0 +1,32 @@
+[tool.poetry]
+name = "cluster-ping"
+version = "0.1.0"
+description = "Simple script to ping given clusters using a given kube config. Results are save to a yaml file in /tmp"
+authors = ["Jim Fitzpatrick <jfitzpat@redhat.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 120
+target-version = ['py39', 'py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+  \.git
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = 'black'
+
+[tool.bandit]
+assert_used.skips = ['*_test.py', '*/test_*.py']
