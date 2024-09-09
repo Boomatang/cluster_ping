@@ -12,7 +12,7 @@ psutil = "^6.0.0"
 pyyaml = "^6.0.2"
 
 [tool.poetry.scripts]
-cluster_ping = 'cluster_ping:action'
+cluster_ping = 'cluster_ping.cluster_ping:action'
 
 [build-system]
 requires = ["poetry-core"]

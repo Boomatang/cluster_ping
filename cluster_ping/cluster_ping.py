@@ -1,6 +1,6 @@
 import argparse
 import os
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +28,7 @@ def can_connect(kubeconfig):
     env["KUBECONFIG"] = kubeconfig
     connected = True
 
-    resp = subprocess.run(["kubectl", "version", "-o", "yaml"], capture_output=True, env=env)
+    resp = subprocess.run(["kubectl", "version", "-o", "yaml"], capture_output=True, env=env)  # nosec B607, B603
     if len(resp.stderr) != 0:
         connected = False
 
