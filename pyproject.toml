@@ -37,3 +37,8 @@ profile = 'black'
 
 [tool.bandit]
 assert_used.skips = ['*_test.py', '*/test_*.py']
+
+[tool.towncrier]
+directroy = "changes"
+package = "cluster_ping"
+filename = "CHANGELOG.md"
