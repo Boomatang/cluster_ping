@@ -5,6 +5,11 @@ description = "Simple script to ping given clusters using a given kube config. R
 authors = ["Jim Fitzpatrick <jfitzpat@redhat.com>"]
 license = "MIT"
 readme = "README.md"
+homepage = "https://github.com/Boomatang/cluster_ping"
+repository = "https://github.com/Boomatang/cluster_ping"
+classifiers = [
+  "Intended Audience :: Developers",
+]
 
 [tool.poetry.dependencies]
 python = "^3.9"
