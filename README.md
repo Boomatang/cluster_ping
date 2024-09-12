@@ -37,3 +37,16 @@ To run the hooks outside a commit using `pre-commit run -a`.
 ### Testing
 `pytest` is the test runner.
 Run tests with `pytest`.
+
+## Release Steps
+1. Create a release branch
+1. Run `towncrier build --draft` and review the outpout.
+1. Check that the verion in the top level __init__.py file is correct. `bat cluster_ping/__init__.py`
+1. Run `towncrier build` to update the change log
+1. Check the changes in the `CHANGELOG.md`
+1. Check in the updates to the Change log.
+1. Publish to pypi `poetry publish --build`
+1. Tag the branch with the release vesion.
+1. Merge the release branch into main.
+1. push change to remote
+1. push release tag `git push origin <tag>
