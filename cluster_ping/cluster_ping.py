@@ -44,6 +44,9 @@ def write_data_file(kubeconfig, cluster, connected):
         with open(data_file) as df:
             data = yaml.safe_load(df)
 
+    if data is None:
+        return
+
     if not str(kubeconfig) in data:
         data.setdefault(str(kubeconfig), {})
 
