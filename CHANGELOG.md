@@ -1,3 +1,14 @@
+# Cluster_Ping 0.1.1 (2024-10-04)
+
+### Bugfixes
+
+- address edge case of data being a none type
+
+### Misc
+
+- document the step for the release process
+
+
 # Cluster_Ping 0.1.0 (2024-09-12)
 
 ### Features

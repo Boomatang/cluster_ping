@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "cluster-ping"
-version = "0.1.0"
+version = "0.1.1"
 description = "Simple script to ping given clusters using a given kube config. Results are save to a yaml file in /tmp"
 authors = ["Jim Fitzpatrick <jfitzpat@redhat.com>"]
 license = "MIT"
