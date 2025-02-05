@@ -4,12 +4,13 @@ import subprocess  # nosec B404
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import psutil
 import yaml
 
 
-def setup_args():
+def setup_args() -> tuple[Path, str]:
     parser = argparse.ArgumentParser(description="Check if current kude user can ping the current cluster")
     parser.add_argument("kubeconfig", help="path to kubeconfig file")
     parser.add_argument("cluster", help="name of cluster to ping")
@@ -23,9 +24,9 @@ def setup_args():
     return kubeconfig, args.cluster
 
 
-def can_connect(kubeconfig):
+def can_connect(kubeconfig: Path) -> bool:
     env = os.environ.copy()
-    env["KUBECONFIG"] = kubeconfig
+    env["KUBECONFIG"] = str(kubeconfig)
     connected = True
 
     resp = subprocess.run(["kubectl", "version", "-o", "yaml"], capture_output=True, env=env)  # nosec B607, B603
@@ -35,7 +36,7 @@ def can_connect(kubeconfig):
     return connected
 
 
-def write_data_file(kubeconfig, cluster, connected):
+def write_data_file(kubeconfig: Path, cluster: str, connected: bool) -> None:
     data_file = Path(tempfile.gettempdir(), "cluster_ping.yaml")
 
     if not data_file.exists():
@@ -56,7 +57,7 @@ def write_data_file(kubeconfig, cluster, connected):
         df.write(yaml.dump(data))
 
 
-def exit_if_running(kubeconfig: str, cluster: str):
+def exit_if_running(kubeconfig: str, cluster: str) -> None:
     count = 0
     for process in psutil.process_iter():
         if process.name().startswith("python"):
@@ -68,7 +69,7 @@ def exit_if_running(kubeconfig: str, cluster: str):
                 exit()
 
 
-def read_kubeconfig(kubeconfig, cluster):
+def read_kubeconfig(kubeconfig: Path, cluster: str) -> dict[str, Any] | Any:
     with open(kubeconfig) as kcf:
         kc = yaml.safe_load(kcf)
 
@@ -82,7 +83,7 @@ def read_kubeconfig(kubeconfig, cluster):
     return kc
 
 
-def get_user_and_server(kc, cluster):
+def get_user_and_server(kc: dict[str, Any], cluster: str) -> str | Any:
     c_cluster = None
     for c in kc["contexts"]:
         if c["name"] == cluster:
@@ -103,7 +104,7 @@ def get_user_and_server(kc, cluster):
     return user
 
 
-def none_user(kc, user):
+def none_user(kc: dict[str, Any], user: str) -> bool:
     for u in kc["users"]:
         if u["name"] == user:
             if not u["user"]:
@@ -111,7 +112,7 @@ def none_user(kc, user):
     return False
 
 
-def action():
+def action() -> None:
     kubeconfig, cluster = setup_args()
     exit_if_running(str(kubeconfig), cluster)
     kc = read_kubeconfig(kubeconfig, cluster)

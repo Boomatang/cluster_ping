@@ -4,7 +4,7 @@ from pathlib import Path
 import cluster_ping
 
 
-def test_release_version():
+def test_release_version() -> None:
     pyproject_file = Path(__file__).parent.parent / "pyproject.toml"
     with open(pyproject_file, "rb") as pf:
         data = tomllib.load(pf)

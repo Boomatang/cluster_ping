@@ -21,6 +21,9 @@ cluster_ping = 'cluster_ping.cluster_ping:action'
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
+mypy = "^1.15.0"
+types-psutil = "^6.1.0.20241221"
+types-pyyaml = "^6.0.12.20241230"
 
 [build-system]
 requires = ["poetry-core"]
