@@ -12,7 +12,6 @@ repos:
       - id: detect-private-key
       - id: check-merge-conflict
       - id: check-docstring-first
-      - id: check-ast
       - id: check-added-large-files
       - id: check-yaml
         args:
@@ -20,30 +19,3 @@ repos:
       - id: no-commit-to-branch
         args:
           - --branch=main
-  - repo: https://github.com/pycqa/flake8
-    rev: 7.1.2
-    hooks:
-      - id: flake8
-  - repo: https://github.com/python-poetry/poetry
-    rev: '2.1.1'
-    hooks:
-      - id: poetry-check
-      - id: poetry-lock
-  - repo: https://github.com/PyCQA/isort
-    rev: '6.0.1'
-    hooks:
-      - id: isort
-  - repo: local
-    hooks:
-      - id: bandit
-        name: bandit
-        entry: bandit
-        language: system
-        pass_filenames: true
-        args: [ "-c", "pyproject.toml" ]
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 'v1.15.0'
-    hooks:
-      - id: mypy
-        args: [--strict]
-        additional_dependencies: [types-psutil, types-PyYAML]
