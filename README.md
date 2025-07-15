@@ -56,10 +56,12 @@ cluster_ping validate <path/to/kube/config> <context-name> 600
 ```
 
 ### Shell Integration Example
-See `scripts/current_cluster.fish` for an example of how to integrate this into a Fish shell prompt. The script:
+See `examples/current_cluster.fish` for an example of how to integrate this into a Fish shell prompt. The script:
 - Runs connectivity checks in the background
 - Provides colored output based on connection status
 - Shows cluster information in shell prompts
+
+For detailed usage instructions and additional examples, see the [examples directory](examples/).
 
 ## Development
 
