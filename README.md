@@ -1,52 +1,116 @@
 # Cluster_ping
 
-This is a simple script to check if the user defined in a given kube config can ping the given cluster.
-The result are currently saved to a yaml file in the operating systems temporary directory.
+This is a simple tool to check if the user defined in a given kube config can connect to the given cluster.
+The results are stored in a simple text file in the operating system's temporary directory for fast retrieval.
+
+This is a Zig port of the original Python implementation, providing better performance and no runtime dependencies.
 
 ## Usage
+
 ### Installation
-It is recommended to use [pipx](https://pipx.pypa.io/latest/installation/) to manage the installation.
+
+#### From Source
+Clone the repository and build with Zig:
 ```sh
-pipx install cluster_ping
+git clone <repository-url>
+cd cluster_ping
+zig build
 ```
 
-The cluster_ping command should then be in the path.
+The binary will be available at `zig-out/bin/cluster_ping`.
+
+#### System Installation
+You can install the binary to your system PATH:
+```sh
+zig build --prefix ~/.local  # Install to ~/.local/bin
+# Or copy manually:
+cp zig-out/bin/cluster_ping ~/.local/bin/
+```
+
+### Dependencies
+The tool requires the following external commands to be available:
+- `kubectl` - for testing cluster connectivity
+- `yq` - for parsing YAML kubeconfig files
+
+### Basic Usage
 ```sh
 cluster_ping --help
 ```
-This will list the help and prove the installation was complete.
+This will display the help information.
 
-By running the cluster_ping with the path to a kude config and the name of a cluster a yaml file is created with the results of the ping.
-This file is created in the standard temporary directory for the OS.
-On Linux this is `/tmp/`.
+#### Check Connectivity
+To test connectivity to a cluster and store the result:
 ```sh
-cluster_ping <Path/to/kube/confing> <Cluster Name>
+cluster_ping check <path/to/kube/config> <context-name>
 ```
 
+#### Validate Recent Connectivity
+To check if there's recent connectivity data (within 300 seconds by default):
+```sh
+cluster_ping validate <path/to/kube/config> <context-name>
+```
+
+You can specify a custom timeout in seconds:
+```sh
+cluster_ping validate <path/to/kube/config> <context-name> 600
+```
+
+### Shell Integration Example
+See `scripts/current_cluster.fish` for an example of how to integrate this into a Fish shell prompt. The script:
+- Runs connectivity checks in the background
+- Provides colored output based on connection status
+- Shows cluster information in shell prompts
+
 ## Development
+
+### Building
+Build the project:
+```sh
+zig build
+```
+
+### Testing
+Run the unit tests:
+```sh
+zig build test
+```
+
+### Running
+Run the application directly:
+```sh
+zig build run -- check ~/.kube/config my-cluster
+```
 
 ### Changelog
 The change log is managed by [towncrier](https://towncrier.readthedocs.io).
 
-### Git Hooks
-The use of pre-commit is used to set up git hooks.
-Use `pre-commit install` to install the hooks.
+### Code Quality
+The project uses standard Zig formatting. Format code with:
+```sh
+zig fmt src/
+```
 
-To run the hooks outside a commit using `pre-commit run -a`.
+## How It Works
 
-### Testing
-`pytest` is the test runner.
-Run tests with `pytest`.
+1. **Check Command**: 
+   - Prevents duplicate processes from running
+   - Parses the kubeconfig file (YAML → JSON via `yq`)
+   - Validates the user configuration
+   - Tests connectivity using `kubectl version`
+   - Stores results with timestamps in `/tmp/cluster_ping`
 
-## Release Steps
-1. Create a release branch
-1. Run `towncrier build --draft` and review the outpout.
-1. Check that the verion in the top level __init__.py file is correct. `bat cluster_ping/__init__.py`
-1. Run `towncrier build` to update the change log
-1. Check the changes in the `CHANGELOG.md`
-1. Check in the updates to the Change log.
-1. Publish to pypi `poetry publish --build`
-1. Tag the branch with the release vesion.
-1. Merge the release branch into main.
-1. push change to remote
-1. push release tag `git push origin <tag>
+2. **Validate Command**:
+   - Reads stored connectivity data
+   - Checks if the data is recent (within specified delay)
+   - Returns connection status and data freshness
+
+The tool stores connectivity results in a simple format in `/tmp/cluster_ping`, allowing for fast retrieval without repeated kubectl calls.
+
+## Output Format
+
+The validate command outputs:
+```
+connected=<true|false> recent=<true|false>
+```
+
+This format is designed for easy parsing in shell scripts and prompt integrations.

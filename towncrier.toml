@@ -1,0 +1,3 @@
+[tool.towncrier]
+name = "cluster_ping"
+filename = "CHANGELOG.md"
