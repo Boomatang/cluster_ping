@@ -24,8 +24,6 @@ function current_cluster
   set -l query '.contexts.[] | select(.name == "'$context'") | .context.cluster'
   set -l cluster (yq "$query" $kubeconfig)
 
-  set -l cluster_ping_file /tmp/cluster_ping.yaml
-
   command cluster_ping check $kubeconfig $context &
 
   set -l result (cluster_ping validate $kubeconfig $context $delay)

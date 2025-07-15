@@ -81,19 +81,9 @@ const KubeConfig = struct {
     preferences: struct {},
 };
 
-pub const FileDataCluster = struct {
-    name: []const u8,
-    connected: bool,
-    checked: i64,
-};
-
-pub const FileData = struct {
-    clusters: []const FileDataCluster,
-};
-
 const MyError = error{
     NotFound,
-    NotImplamented,
+    NotImplemented,
     YqCommandFailed,
 };
 
@@ -368,7 +358,7 @@ fn help_string() []const u8 {
     const str =
         \\ usage: cluster_ping command kubeconfig cluster seconds
         \\
-        \\ Check if current kude user can ping the current cluster
+        \\ Check if current kube user can ping the current cluster
         \\ 
         \\ positional arguments:
         \\   command     which task to do check|validate
