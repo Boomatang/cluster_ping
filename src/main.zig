@@ -1,9 +1,17 @@
 const std = @import("std");
 
+const Command = enum {
+    check,
+    validate,
+    not_valid,
+};
+
 const Result = struct {
     help: bool,
     path: []const u8,
     name: []const u8,
+    command: Command,
+    delay: u32 = 300,
 
     // Pretty print function for debugging
     pub fn prettyPrint(self: *const Result) void {
@@ -11,6 +19,9 @@ const Result = struct {
         std.debug.print("  help: {}\n", .{self.help});
         std.debug.print("  path: \"{s}\"\n", .{self.path});
         std.debug.print("  name: \"{s}\"\n", .{self.name});
+        std.debug.print("  command: \"{any}\"\n", .{self.command});
+        std.debug.print("  delay: \"{d}\"\n", .{self.delay});
+
         std.debug.print("}}\n", .{});
     }
 };
@@ -93,19 +104,69 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const result = parseArgs(args);
+    const result = try parseArgs(args);
 
     if (result.help) {
-        const stdout_file = std.io.getStdOut().writer();
-        var bw = std.io.bufferedWriter(stdout_file);
-        const stdout = bw.writer();
-        try stdout.print("{s}\n", .{help_string()});
-
-        try bw.flush(); // Don't forget to flush!
+        try print_help();
     }
 
-    try exit_if_running(allocator, result);
-    const kube = read_kube_config(allocator, result) catch |err| switch (err) {
+    switch (result.command) {
+        Command.check => try check_cluster_connection(allocator, result),
+        Command.validate => validate_connection(allocator, result) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        },
+        else => try print_help(),
+    }
+}
+
+fn print_help() !void {
+    const stdout_file = std.io.getStdOut().writer();
+    var bw = std.io.bufferedWriter(stdout_file);
+    const stdout = bw.writer();
+    try stdout.print("{s}\n", .{help_string()});
+
+    try bw.flush(); // Don't forget to flush!
+}
+
+fn find_entry(allocator: std.mem.Allocator, data: struct { path: []const u8, name: []const u8 }, file: std.fs.File) !?struct { connected: bool, timestamp: i64 } {
+    const endPos = try file.getEndPos();
+    const contents = try allocator.alloc(u8, endPos);
+    defer allocator.free(contents);
+    _ = try file.readAll(contents);
+
+    var split_contents = std.mem.splitSequence(u8, contents, "\n");
+    const key = try std.mem.concat(allocator, u8, &.{ data.path, data.name });
+    defer allocator.free(key);
+
+    while (split_contents.next()) |line| {
+        if (std.mem.startsWith(u8, line, key)) {
+            const connected = line[key.len] != 0;
+            const timestamp = try std.fmt.parseInt(i64, line[key.len + 1 ..], 10);
+            return .{ .connected = connected, .timestamp = timestamp };
+        }
+    }
+    return null;
+}
+
+fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
+    const file = try std.fs.cwd().openFile("/tmp/cluster_ping", .{});
+    defer file.close();
+    const result = try find_entry(allocator, .{ .path = data.path, .name = data.name }, file);
+    const delay = data.delay * 1000;
+    const time_unit = result.?.timestamp + delay;
+    const in_time = (std.time.milliTimestamp() < time_unit);
+    const stdout_file = std.io.getStdOut().writer();
+    var bw = std.io.bufferedWriter(stdout_file);
+    const stdout = bw.writer();
+    try stdout.print("connected={} recent={}\n", .{ result.?.connected, in_time });
+
+    try bw.flush(); // Don't forget to flush!
+}
+
+fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
+    try exit_if_running(allocator, data);
+    const kube = read_kube_config(allocator, data) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
@@ -114,7 +175,7 @@ pub fn main() !void {
 
     const kube_config = kube.parsed.value;
 
-    const user = get_user(kube_config, result.name) catch |err| switch (err) {
+    const user = get_user(kube_config, data.name) catch |err| switch (err) {
         MyError.NotFound => return,
         else => return err,
     };
@@ -124,9 +185,9 @@ pub fn main() !void {
         return MyError.NotImplamented;
     }
 
-    const connected = try can_connect(allocator, result.path);
+    const connected = try can_connect(allocator, data.path);
 
-    try write_data(allocator, result, connected);
+    try write_data(allocator, data, connected);
 }
 
 fn get_file(path: []const u8) !std.fs.File {
@@ -245,8 +306,14 @@ fn get_user(kc: KubeConfig, cluster: []const u8) ![]const u8 {
     return MyError.NotFound;
 }
 
-fn parseArgs(args: []const []const u8) Result {
-    var result = Result{ .help = true, .name = "", .path = "" };
+fn commandToEnum(command: []const u8) Command {
+    if (std.mem.eql(u8, command, "check")) return .check;
+    if (std.mem.eql(u8, command, "validate")) return .validate;
+    return .not_valid;
+}
+
+fn parseArgs(args: []const []const u8) !Result {
+    var result = Result{ .help = true, .name = "", .path = "", .command = Command.not_valid };
 
     if (args.len == 1) {
         return result;
@@ -258,11 +325,15 @@ fn parseArgs(args: []const []const u8) Result {
         }
     }
 
-    if (args.len == 3) {
+    if (args.len >= 4) {
         result.help = false;
-        result.path = args[1];
-        result.name = args[2];
-        return result;
+        result.path = args[2];
+        result.name = args[3];
+        result.command = commandToEnum(args[1]);
+    }
+    if (args.len == 5) {
+        const num = try std.fmt.parseInt(u32, args[4], 10);
+        result.delay = num;
     }
 
     return result;
@@ -292,13 +363,15 @@ test "Correct args have being set" {
 
 fn help_string() []const u8 {
     const str =
-        \\ usage: cluster_ping kubeconfig cluster
+        \\ usage: cluster_ping command kubeconfig cluster seconds
         \\
         \\ Check if current kude user can ping the current cluster
         \\ 
         \\ positional arguments:
+        \\   command     which task to do check|validate
         \\   kubeconfig  path to kubeconfig file
         \\   cluster     name of cluster to ping
+        \\   seconds     Time for valid check, default 300
     ;
 
     return str;
