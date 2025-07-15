@@ -183,7 +183,7 @@ fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
 
     if (none_user(kube_config, user)) {
         std.debug.print("This was a none user\n", .{});
-        return MyError.NotImplamented;
+        return MyError.NotImplemented;
     }
 
     const connected = try can_connect(allocator, data.path);
