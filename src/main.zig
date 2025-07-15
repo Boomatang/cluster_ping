@@ -94,6 +94,7 @@ pub const FileData = struct {
 const MyError = error{
     NotFound,
     NotImplamented,
+    YqCommandFailed,
 };
 
 pub fn main() !void {
@@ -141,7 +142,7 @@ fn find_entry(allocator: std.mem.Allocator, data: struct { path: []const u8, nam
 
     while (split_contents.next()) |line| {
         if (std.mem.startsWith(u8, line, key)) {
-            const connected = line[key.len] != 0;
+            const connected = line[key.len] != '0';
             const timestamp = try std.fmt.parseInt(i64, line[key.len + 1 ..], 10);
             return .{ .connected = connected, .timestamp = timestamp };
         }
@@ -252,10 +253,12 @@ fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
 
     try env_map.put("KUBECONFIG", path);
 
+    const home = std.posix.getenv("HOME");
+
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &argv,
-        .cwd = null,
+        .cwd = home,
         .env_map = @constCast(&env_map),
         .max_output_bytes = 1024 * 1024, // 1MB max output
     }) catch |err| {
@@ -503,7 +506,7 @@ fn convertYamlToJson(allocator: std.mem.Allocator, yaml_file_path: []const u8) !
         std.debug.print("stderr: {s}\n", .{result.stderr});
         allocator.free(result.stdout);
         allocator.free(result.stderr);
-        return error.YqCommandFailed;
+        return MyError.YqCommandFailed;
     }
     allocator.free(result.stderr);
     return result.stdout;
