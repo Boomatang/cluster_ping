@@ -1,3 +1,10 @@
+# cluster_ping 0.2.1 (2025-07-27)
+
+### Bugfixes
+
+- Try to fix the missing field error that was happened with blank config files.
+
+
 # cluster_ping 4.0.2 (2025-07-21)
 
 ### Features
