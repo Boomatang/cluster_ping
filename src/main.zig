@@ -158,6 +158,7 @@ fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
 fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
     try exit_if_running(allocator, data);
     const kube = read_kube_config(allocator, data) catch |err| switch (err) {
+        MyError.NotFound => return,
         error.FileNotFound => return,
         else => return err,
     };
@@ -334,24 +335,30 @@ fn parseArgs(args: []const []const u8) !Result {
 
 test "help bool set if on args" {
     var more_sources: []const [:0]const u8 = &[_][:0]const u8{ "program", "--help" };
-    var result = parseArgs(more_sources);
+    var result = try parseArgs(more_sources);
     try std.testing.expectEqual(true, result.help);
 
     more_sources = &[_][:0]const u8{"program"};
-    result = parseArgs(more_sources);
-    try std.testing.expectEqual(true, result.help);
-
-    more_sources = &[_][:0]const u8{ "program", "peter", "has", "tea" };
-    result = parseArgs(more_sources);
+    result = try parseArgs(more_sources);
     try std.testing.expectEqual(true, result.help);
 }
 
-test "Correct args have being set" {
-    const more_sources: []const [:0]const u8 = &[_][:0]const u8{ "program", "file path", "cluster name" };
-    const result = parseArgs(more_sources);
+test "Correct args for cluster ping have being set" {
+    const more_sources: []const [:0]const u8 = &[_][:0]const u8{ "program", "check", "file path", "cluster name" };
+    const result = try parseArgs(more_sources);
     try std.testing.expectEqual(false, result.help);
     try std.testing.expectEqual("file path", result.path);
     try std.testing.expectEqual("cluster name", result.name);
+    try std.testing.expectEqual(Command.check, result.command);
+}
+
+test "Correct args for cluster validate have being set" {
+    const more_sources: []const [:0]const u8 = &[_][:0]const u8{ "program", "validate", "file path", "cluster name" };
+    const result = try parseArgs(more_sources);
+    try std.testing.expectEqual(false, result.help);
+    try std.testing.expectEqual("file path", result.path);
+    try std.testing.expectEqual("cluster name", result.name);
+    try std.testing.expectEqual(Command.validate, result.command);
 }
 
 fn help_string() []const u8 {
@@ -469,10 +476,11 @@ fn read_kube_config(allocator: std.mem.Allocator, data: Result) !struct { parsed
         std.debug.print("Failed to convert YAML to JSON: {}\n", .{err});
         return err;
     };
+    errdefer allocator.free(json_data);
 
-    const parsed = std.json.parseFromSlice(KubeConfig, allocator, json_data, .{}) catch |err| {
-        allocator.free(json_data);
-        return err;
+    const parsed = std.json.parseFromSlice(KubeConfig, allocator, json_data, .{}) catch |err| switch (err) {
+        std.json.ParseFromValueError.MissingField => return MyError.NotFound,
+        else => return err,
     };
     return .{ .parsed = parsed, .json_data = json_data };
 }
@@ -490,14 +498,76 @@ fn convertYamlToJson(allocator: std.mem.Allocator, yaml_file_path: []const u8) !
         std.debug.print("Failed to run yq: {}\n", .{err});
         return err;
     };
+    errdefer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
 
     if (result.term.Exited != 0) {
         std.debug.print("yq command failed with exit code: {}\n", .{result.term.Exited});
         std.debug.print("stderr: {s}\n", .{result.stderr});
-        allocator.free(result.stdout);
-        allocator.free(result.stderr);
         return MyError.YqCommandFailed;
     }
-    allocator.free(result.stderr);
     return result.stdout;
+}
+
+test "Valid config used" {
+    const config =
+        \\{
+        \\  "apiVersion": "v1",
+        \\  "clusters": [
+        \\    {
+        \\      "cluster": {
+        \\        "certificate-authority-data": "asdf",
+        \\        "server": "https://127.0.0.1:43199"
+        \\      },
+        \\      "name": "kind-kind"
+        \\    }
+        \\  ],
+        \\  "contexts": [
+        \\    {
+        \\      "context": {
+        \\        "cluster": "kind-kind",
+        \\        "user": "kind-kind"
+        \\      },
+        \\      "name": "kind-kind"
+        \\    }
+        \\  ],
+        \\  "current-context": "kind-kind",
+        \\  "kind": "Config",
+        \\  "preferences": {},
+        \\  "users": [
+        \\    {
+        \\      "name": "kind-kind",
+        \\      "user": {
+        \\        "client-certificate-data": "asdf",
+        \\        "client-key-data": "asdf"
+        \\      }
+        \\    }
+        \\  ]
+        \\}
+    ;
+
+    const parsed = try std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{});
+    defer parsed.deinit();
+}
+
+test "Valid empty config used" {
+    const config =
+        \\{
+        \\  "apiVersion": "v1",
+        \\  "kind": "Config",
+        \\  "preferences": {}
+        \\}
+    ;
+
+    const parsed = std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        std.json.ParseFromValueError.MissingField => {
+            std.debug.print("Found the error, {any}", .{err});
+            return;
+        },
+        else => {
+            std.debug.print("This was found {any}", .{err});
+            return;
+        },
+    };
+    defer parsed.deinit();
 }
