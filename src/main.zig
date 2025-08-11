@@ -41,6 +41,8 @@ const ProcessInfo = struct {
     }
 };
 
+const TimeResult = struct { connected: bool, timestamp: i64 };
+
 const Server = struct {
     @"certificate-authority-data": []const u8,
     server: []const u8,
@@ -145,14 +147,17 @@ fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
     defer file.close();
     const result = try find_entry(allocator, .{ .path = data.path, .name = data.name }, file);
     const delay = data.delay * 1000;
-    const time_unit = result.?.timestamp + delay;
-    const in_time = (std.time.milliTimestamp() < time_unit);
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
-    try stdout.print("connected={} recent={}\n", .{ result.?.connected, in_time });
 
-    try bw.flush(); // Don't forget to flush!
+    if (result) |r| {
+        const time_unit = r.timestamp + delay;
+        const in_time = (std.time.milliTimestamp() < time_unit);
+        const stdout_file = std.io.getStdOut().writer();
+        var bw = std.io.bufferedWriter(stdout_file);
+        const stdout = bw.writer();
+        try stdout.print("connected={} recent={}\n", .{ r.connected, in_time });
+
+        try bw.flush(); // Don't forget to flush!
+    }
 }
 
 fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
@@ -478,7 +483,7 @@ fn read_kube_config(allocator: std.mem.Allocator, data: Result) !struct { parsed
     };
     errdefer allocator.free(json_data);
 
-    const parsed = std.json.parseFromSlice(KubeConfig, allocator, json_data, .{}) catch |err| switch (err) {
+    const parsed = std.json.parseFromSlice(KubeConfig, allocator, json_data, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         std.json.ParseFromValueError.MissingField => return MyError.NotFound,
         else => return err,
     };

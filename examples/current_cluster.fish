@@ -5,7 +5,7 @@ function current_cluster
 
   set -l active (set_color magenta)
   set -l inactive (set_color black)
-  set -l unknown (set_color yellow)
+  set -l unknown (set_color red)
   set -l normal (set_color normal)
 
   set -l kubeconfig ~/.kube/config
@@ -32,10 +32,12 @@ function current_cluster
   echo $result_list[1]
   echo $result_list[2]
   set color $unknown
-  if test $result_list[2] = "recent=true"
-    set color $inactive
-    if test $result_list[1] = "connected=true"
-      set color $active
+  if test (count result_list) -eq 2
+    if test $result_list[2] = "recent=true"
+      set color $inactive
+      if test $result_list[1] = "connected=true"
+        set color $active
+      end
     end
   end
 
