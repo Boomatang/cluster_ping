@@ -29,8 +29,6 @@ function current_cluster
   set -l result (cluster_ping validate $kubeconfig $context $delay)
 
   set -l result_list (string split ' ' $result)
-  echo $result_list[1]
-  echo $result_list[2]
   set color $unknown
   if test (count result_list) -eq 2
     if test $result_list[2] = "recent=true"
