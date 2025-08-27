@@ -43,44 +43,34 @@ const ProcessInfo = struct {
 
 const TimeResult = struct { connected: bool, timestamp: i64 };
 
-const Server = struct {
-    @"certificate-authority-data": []const u8,
-    server: []const u8,
-};
-
 const Cluster = struct {
-    cluster: Server,
-    name: []const u8,
+    name: ?[]const u8 = null,
 };
 
 const SubContext = struct {
-    cluster: []const u8,
-    user: []const u8,
+    cluster: ?[]const u8 = null,
+    user: ?[]const u8 = null,
 };
 
 const Context = struct {
-    context: SubContext,
-    name: []const u8,
+    context: ?SubContext = null,
+    name: ?[]const u8 = null,
 };
 
 const SubUser = struct {
-    @"client-certificate-data": []const u8,
-    @"client-key-data": []const u8,
+    @"client-certificate-data": ?[]const u8 = null,
+    @"client-key-data": ?[]const u8 = null,
 };
 
 const User = struct {
-    name: []const u8,
-    user: ?SubUser,
+    name: ?[]const u8 = null,
+    user: ?SubUser = null,
 };
 
 const KubeConfig = struct {
-    apiVersion: []const u8,
-    clusters: []Cluster,
-    contexts: []Context,
-    @"current-context": []const u8,
-    kind: []const u8,
-    users: []User,
-    preferences: struct {},
+    clusters: ?[]Cluster = null,
+    contexts: ?[]Context = null,
+    users: ?[]User = null,
 };
 
 const MyError = error{
@@ -104,7 +94,12 @@ pub fn main() !void {
     }
 
     switch (result.command) {
-        Command.check => try check_cluster_connection(allocator, result),
+        Command.check => check_cluster_connection(allocator, result) catch |err| switch (err) {
+            else => {
+                std.debug.print("We got this error, {?}", .{err});
+                return err;
+            },
+        },
         Command.validate => validate_connection(allocator, result) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
@@ -163,8 +158,14 @@ fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
 fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
     try exit_if_running(allocator, data);
     const kube = read_kube_config(allocator, data) catch |err| switch (err) {
-        MyError.NotFound => return,
-        error.FileNotFound => return,
+        MyError.NotFound => {
+            std.debug.print("error 1: {?}\n", .{err});
+            return;
+        },
+        error.FileNotFound => {
+            std.debug.print("error 1: {?}\n", .{err});
+            return;
+        },
         else => return err,
     };
     defer kube.parsed.deinit();
@@ -273,10 +274,14 @@ fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
 }
 
 fn none_user(kc: KubeConfig, user: []const u8) bool {
-    for (kc.users) |u| {
-        if (std.mem.eql(u8, u.name, user)) {
-            if (u.user == null) {
-                return true;
+    if (kc.users) |users| {
+        for (users) |u| {
+            if (u.name) |name| {
+                if (std.mem.eql(u8, name, user)) {
+                    if (u.user == null) {
+                        return true;
+                    }
+                }
             }
         }
     }
@@ -286,19 +291,33 @@ fn none_user(kc: KubeConfig, user: []const u8) bool {
 fn get_user(kc: KubeConfig, cluster: []const u8) ![]const u8 {
     var user: []const u8 = "";
     var c_cluster: []const u8 = "";
-    for (kc.contexts) |context| {
-        if (std.mem.eql(u8, context.name, cluster)) {
-            if (context.context.cluster.len == 0) {
-                return MyError.NotFound;
+    if (kc.contexts) |contexts| {
+        for (contexts) |context| {
+            if (context.name) |name| {
+                if (std.mem.eql(u8, name, cluster)) {
+                    if (context.context) |c| {
+                        if (c.cluster) |cluster_| {
+                            if (cluster_.len == 0) {
+                                return MyError.NotFound;
+                            }
+                            c_cluster = cluster_;
+                        }
+                        if (c.user) |u| {
+                            user = u;
+                        }
+                        break;
+                    }
+                }
             }
-            c_cluster = context.context.cluster;
-            user = context.context.user;
-            break;
         }
     }
-    for (kc.clusters) |c| {
-        if (std.mem.eql(u8, c.name, c_cluster)) {
-            return user;
+    if (kc.clusters) |clusters| {
+        for (clusters) |c| {
+            if (c.name) |name| {
+                if (std.mem.eql(u8, name, c_cluster)) {
+                    return user;
+                }
+            }
         }
     }
 
@@ -551,11 +570,103 @@ test "Valid config used" {
         \\}
     ;
 
-    const parsed = try std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{});
+    const parsed = try std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
 }
 
-test "Valid empty config used" {
+test "more_missing_fields_testing" {
+    const config =
+        \\ {
+        \\   "apiVersion": "v1",
+        \\   "clusters": [
+        \\     {
+        \\       "cluster": {
+        \\         "insecure-skip-tls-verify": true,
+        \\         "server": "https://api.ci-ln-y9m1772-76ef8.aws-2.ci.openshift.org:6443"
+        \\       },
+        \\       "name": "api-ci-ln-y9m1772-76ef8-aws-2-ci-openshift-org:6443"
+        \\     },
+        \\     {
+        \\       "cluster": {
+        \\         "certificate-authority-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...short_cert_1",
+        \\         "server": "https://127.0.0.1:37609"
+        \\       },
+        \\       "name": "kind-kuadrant-dns-local-1"
+        \\     },
+        \\     {
+        \\       "cluster": {
+        \\         "certificate-authority-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...short_cert_2",
+        \\         "server": "https://127.0.0.1:39733"
+        \\       },
+        \\       "name": "kind-kind"
+        \\     }
+        \\   ],
+        \\   "contexts": [
+        \\     {
+        \\       "context": {
+        \\         "cluster": "api-ci-ln-y9m1772-76ef8-aws-2-ci-openshift-org:6443",
+        \\         "namespace": "default",
+        \\         "user": "kube:admin/api-ci-ln-y9m1772-76ef8-aws-2-ci-openshift-org:6443"
+        \\       },
+        \\       "name": "default/api-ci-ln-y9m1772-76ef8-aws-2-ci-openshift-org:6443/kube:admin"
+        \\     },
+        \\     {
+        \\       "context": {
+        \\         "cluster": "kind-kuadrant-dns-local-1",
+        \\         "user": "kind-kuadrant-dns-local-1"
+        \\       },
+        \\       "name": "kind-kuadrant-dns-local-1"
+        \\     },
+        \\     {
+        \\       "context": {
+        \\         "cluster": "kind-kind",
+        \\         "user": "kind-kind"
+        \\       },
+        \\       "name": "kind-kind"
+        \\     }
+        \\   ],
+        \\   "current-context": "kind-kind",
+        \\   "kind": "Config",
+        \\   "preferences": {},
+        \\   "users": [
+        \\     {
+        \\       "name": "kube:admin/api-ci-ln-y9m1772-76ef8-aws-2-ci-openshift-org:6443",
+        \\       "user": {
+        \\         "token": "sha256~7ZbrxBOxmTIBJweKwDWoOh5HldwDaSEuQrIHxX0wRZ8"
+        \\       }
+        \\     },
+        \\     {
+        \\       "name": "kind-kuadrant-dns-local-1",
+        \\       "user": {
+        \\         "client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...short_client_cert_1",
+        \\         "client-key-data": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ...short_client_key_1"
+        \\       }
+        \\     },
+        \\     {
+        \\       "name": "kind-kind",
+        \\       "user": {
+        \\         "client-certificate-data": "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t...short_client_cert_2",
+        \\         "client-key-data": "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQ...short_client_key_2"
+        \\       }
+        \\     }
+        \\   ]
+        \\ }
+    ;
+
+    const parsed = std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        std.json.ParseFromValueError.MissingField => {
+            std.debug.print("Found the error, {any}\n", .{err});
+            return err;
+        },
+        else => {
+            std.debug.print("This was found {any}\n", .{err});
+            return err;
+        },
+    };
+    defer parsed.deinit();
+}
+
+test "Valid_empty_config_used" {
     const config =
         \\{
         \\  "apiVersion": "v1",
@@ -566,12 +677,12 @@ test "Valid empty config used" {
 
     const parsed = std.json.parseFromSlice(KubeConfig, std.testing.allocator, config, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         std.json.ParseFromValueError.MissingField => {
-            std.debug.print("Found the error, {any}", .{err});
-            return;
+            std.debug.print("Found the error, {any}\n", .{err});
+            return err;
         },
         else => {
-            std.debug.print("This was found {any}", .{err});
-            return;
+            std.debug.print("This was found {any}\n", .{err});
+            return err;
         },
     };
     defer parsed.deinit();
