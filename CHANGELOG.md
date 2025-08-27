@@ -1,3 +1,12 @@
+# cluster_ping 0.2.2 (2025-08-27)
+
+### Bugfixes
+
+- Add the allow missing fields to the production code for parsing the json, and just have it in the tests.
+- Address different kubeconfig formats
+- Example fish script gave errors when the initial cluster_ping file did not exist in /tmp
+
+
 # cluster_ping 0.2.1 (2025-07-27)
 
 ### Bugfixes
