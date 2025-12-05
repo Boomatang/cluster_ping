@@ -247,6 +247,7 @@ fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
     const argv = [4][]const u8{ "kubectl", "version", "-o", "json" };
     var env_map = std.process.EnvMap.init(allocator);
     defer env_map.deinit();
+    // std.debug.print("path: {s}\n", .{path});
 
     try env_map.put("KUBECONFIG", path);
 
@@ -266,7 +267,9 @@ fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.stderr.len > 0) {
+    // std.debug.print("term: {}\nstderr: {s}\n stdout: {s}\n", .{ result.term, result.stderr, result.stdout });
+
+    if (result.term.Exited != 0) {
         return false;
     }
 
