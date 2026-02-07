@@ -79,6 +79,10 @@ const MyError = error{
     YqCommandFailed,
 };
 
+var stdout_buf: [1024]u8 = undefined;
+var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+const stdout: *std.io.Writer = &stdout_writer.interface;
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -96,7 +100,7 @@ pub fn main() !void {
     switch (result.command) {
         Command.check => check_cluster_connection(allocator, result) catch |err| switch (err) {
             else => {
-                std.debug.print("We got this error, {?}", .{err});
+                std.debug.print("We got this error, {}", .{err});
                 return err;
             },
         },
@@ -109,12 +113,8 @@ pub fn main() !void {
 }
 
 fn print_help() !void {
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
     try stdout.print("{s}\n", .{help_string()});
-
-    try bw.flush(); // Don't forget to flush!
+    try stdout.flush(); // Don't forget to flush!
 }
 
 fn find_entry(allocator: std.mem.Allocator, data: struct { path: []const u8, name: []const u8 }, file: std.fs.File) !?struct { connected: bool, timestamp: i64 } {
@@ -146,12 +146,8 @@ fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
     if (result) |r| {
         const time_unit = r.timestamp + delay;
         const in_time = (std.time.milliTimestamp() < time_unit);
-        const stdout_file = std.io.getStdOut().writer();
-        var bw = std.io.bufferedWriter(stdout_file);
-        const stdout = bw.writer();
         try stdout.print("connected={} recent={}\n", .{ r.connected, in_time });
-
-        try bw.flush(); // Don't forget to flush!
+        try stdout.flush(); // Don't forget to flush!
     }
 }
 
@@ -159,11 +155,11 @@ fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
     try exit_if_running(allocator, data);
     const kube = read_kube_config(allocator, data) catch |err| switch (err) {
         MyError.NotFound => {
-            std.debug.print("error 1: {?}\n", .{err});
+            std.debug.print("error 1: {}\n", .{err});
             return;
         },
         error.FileNotFound => {
-            std.debug.print("error 1: {?}\n", .{err});
+            std.debug.print("error 1: {}\n", .{err});
             return;
         },
         else => return err,
@@ -211,8 +207,8 @@ fn write_data(allocator: std.mem.Allocator, data: Result, connected: bool) !void
     var split_contents = std.mem.splitSequence(u8, contents, "\n");
     const key = try std.mem.concat(allocator, u8, &.{ data.path, data.name });
     defer allocator.free(key);
-    var next_data = std.ArrayList([]const u8).init(allocator);
-    defer next_data.deinit();
+    var next_data = std.ArrayList([]const u8){};
+    defer next_data.deinit(allocator);
 
     const connected_u8: u8 = @intFromBool(connected);
     const time = std.time.milliTimestamp();
@@ -225,13 +221,13 @@ fn write_data(allocator: std.mem.Allocator, data: Result, connected: bool) !void
     while (split_contents.next()) |line| {
         if (std.mem.startsWith(u8, line, key)) {
             not_found = false;
-            try next_data.append(value);
+            try next_data.append(allocator, value);
         } else {
-            try next_data.append(line);
+            try next_data.append(allocator, line);
         }
     }
     if (not_found) {
-        try next_data.append(value);
+        try next_data.append(allocator, value);
     }
 
     try file.seekTo(0);
@@ -417,8 +413,15 @@ fn exit_if_running(allocator: std.mem.Allocator, result: Result) !void {
 
     const resp = try findProcessLinux(allocator, data);
     if (resp) |process_list| {
-        defer process_list.deinit();
-        if (process_list.items.len > 1) {
+        var list = process_list;
+        defer {
+            for (list.items) |i| {
+                allocator.free(i.name);
+                allocator.free(i.args);
+            }
+            list.deinit(allocator);
+        }
+        if (list.items.len > 1) {
             std.process.exit(0);
         }
     }
@@ -428,7 +431,7 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
     var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
     defer proc_dir.close();
 
-    var process_list = std.ArrayList(ProcessInfo).init(allocator);
+    var process_list = std.ArrayList(ProcessInfo){};
 
     var iter = proc_dir.iterate();
     while (try iter.next()) |entry| {
@@ -448,20 +451,20 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
         defer allocator.free(cmdline_data);
 
         // Convert null-separated arguments to space-separated
-        var args_list = std.ArrayList(u8).init(allocator);
-        defer args_list.deinit();
+        var args_list = std.ArrayList(u8){};
+        defer args_list.deinit(allocator);
 
         for (cmdline_data, 0..) |byte, i| {
             if (byte == 0) {
                 if (i < cmdline_data.len - 1) {
-                    try args_list.append(' ');
+                    try args_list.append(allocator, ' ');
                 }
             } else {
-                try args_list.append(byte);
+                try args_list.append(allocator, byte);
             }
         }
 
-        const args_str = try args_list.toOwnedSlice();
+        const args_str = try args_list.toOwnedSlice(allocator);
         defer allocator.free(args_str);
 
         // Check if target arguments are contained in process arguments
@@ -486,10 +489,8 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
             const cp_args = try allocator.alloc(u8, args_str.len);
             @memcpy(cp_name, name);
             @memcpy(cp_args, args_str);
-            defer allocator.free(cp_name);
-            defer allocator.free(cp_args);
 
-            try process_list.append(ProcessInfo{ .pid = pid, .name = cp_name, .args = cp_args });
+            try process_list.append(allocator, ProcessInfo{ .pid = pid, .name = cp_name, .args = cp_args });
         }
     }
 
