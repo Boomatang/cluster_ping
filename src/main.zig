@@ -79,55 +79,54 @@ const MyError = error{
     YqCommandFailed,
 };
 
-var stdout_buf: [1024]u8 = undefined;
-var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-const stdout: *std.io.Writer = &stdout_writer.interface;
+pub fn main(init: std.process.Init) !void {
+    var buf: [1024]u8 = undefined;
+    var file_writer = std.Io.File.stdout().writer(init.io, &buf);
+    const stdout = &file_writer.interface;
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = init.gpa;
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const args = try init.minimal.args.toSlice(allocator);
+    defer allocator.free(args);
 
     const result = try parseArgs(args);
 
     if (result.help) {
-        try print_help();
+        try print_help(stdout);
+        std.process.exit(0);
     }
 
     switch (result.command) {
-        Command.check => check_cluster_connection(allocator, result) catch |err| switch (err) {
+        Command.check => check_cluster_connection(init.io, allocator, result, init.environ_map) catch |err| switch (err) {
             else => {
                 std.debug.print("We got this error, {}", .{err});
                 return err;
             },
         },
-        Command.validate => validate_connection(allocator, result) catch |err| switch (err) {
+        Command.validate => validate_connection(init.io, allocator, result, stdout) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
         },
-        else => try print_help(),
+        else => try print_help(stdout),
     }
 }
 
-fn print_help() !void {
-    try stdout.print("{s}\n", .{help_string()});
-    try stdout.flush(); // Don't forget to flush!
+fn print_help(writer: *std.Io.Writer) !void {
+    try writer.print("{s}\n", .{help_string()});
+    try writer.flush(); // Don't forget to flush!
 }
 
-fn find_entry(allocator: std.mem.Allocator, data: struct { path: []const u8, name: []const u8 }, file: std.fs.File) !?struct { connected: bool, timestamp: i64 } {
-    const endPos = try file.getEndPos();
-    const contents = try allocator.alloc(u8, endPos);
-    defer allocator.free(contents);
-    _ = try file.readAll(contents);
+fn find_entry(io: std.Io, allocator: std.mem.Allocator, data: struct { path: []const u8, name: []const u8 }, file: std.Io.File) !?struct { connected: bool, timestamp: i64 } {
+    var buf: [1024]u8 = undefined;
+    var reader = file.reader(io, &buf);
 
-    var split_contents = std.mem.splitSequence(u8, contents, "\n");
     const key = try std.mem.concat(allocator, u8, &.{ data.path, data.name });
     defer allocator.free(key);
 
-    while (split_contents.next()) |line| {
+    while (reader.interface.takeDelimiter('\n') catch |err| switch (err) {
+        error.ReadFailed => return if (reader.err) |e| e else error.ReadFailed,
+        else => return err,
+    }) |line| {
         if (std.mem.startsWith(u8, line, key)) {
             const connected = line[key.len] != '0';
             const timestamp = try std.fmt.parseInt(i64, line[key.len + 1 ..], 10);
@@ -137,23 +136,23 @@ fn find_entry(allocator: std.mem.Allocator, data: struct { path: []const u8, nam
     return null;
 }
 
-fn validate_connection(allocator: std.mem.Allocator, data: Result) !void {
-    const file = try std.fs.cwd().openFile("/tmp/cluster_ping", .{});
-    defer file.close();
-    const result = try find_entry(allocator, .{ .path = data.path, .name = data.name }, file);
+fn validate_connection(io: std.Io, allocator: std.mem.Allocator, data: Result, writer: *std.Io.Writer) !void {
+    const file = try std.Io.Dir.cwd().openFile(io, "/tmp/cluster_ping", .{ .mode = .read_only });
+    defer file.close(io);
+    const result = try find_entry(io, allocator, .{ .path = data.path, .name = data.name }, file);
     const delay = data.delay * 1000;
 
     if (result) |r| {
         const time_unit = r.timestamp + delay;
-        const in_time = (std.time.milliTimestamp() < time_unit);
-        try stdout.print("connected={} recent={}\n", .{ r.connected, in_time });
-        try stdout.flush(); // Don't forget to flush!
+        const in_time = (std.Io.Timestamp.now(io, .real).toMilliseconds() < time_unit);
+        try writer.print("connected={} recent={}\n", .{ r.connected, in_time });
+        try writer.flush(); // Don't forget to flush!
     }
 }
 
-fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
-    try exit_if_running(allocator, data);
-    const kube = read_kube_config(allocator, data) catch |err| switch (err) {
+fn check_cluster_connection(io: std.Io, allocator: std.mem.Allocator, data: Result, environ_map: *std.process.Environ.Map) !void {
+    try exit_if_running(io, allocator, data);
+    const kube = read_kube_config(io, allocator, data) catch |err| switch (err) {
         MyError.NotFound => {
             std.debug.print("error 1: {}\n", .{err});
             return;
@@ -179,39 +178,38 @@ fn check_cluster_connection(allocator: std.mem.Allocator, data: Result) !void {
         return MyError.NotImplemented;
     }
 
-    const connected = try can_connect(allocator, data.path);
+    const connected = try can_connect(io, allocator, data.path, environ_map);
 
-    try write_data(allocator, data, connected);
+    try write_data(io, allocator, data, connected);
 }
 
-fn get_file(path: []const u8) !std.fs.File {
-    return std.fs.cwd().openFile(path, .{ .mode = .read_write }) catch |err|
+fn get_file(io: std.Io, path: []const u8) !std.Io.File {
+    return std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |err|
         switch (err) {
             error.FileNotFound => {
-                return try std.fs.cwd().createFile(path, .{});
+                return try std.Io.Dir.cwd().createFile(io, path, .{});
             },
             else => return err,
         };
 }
 
-fn write_data(allocator: std.mem.Allocator, data: Result, connected: bool) !void {
+fn write_data(io: std.Io, allocator: std.mem.Allocator, data: Result, connected: bool) !void {
     const tmp_dir = "/tmp/cluster_ping";
-    const file = try get_file(tmp_dir);
-    defer file.close();
+    const file = try get_file(io, tmp_dir);
 
-    const file_size = try file.getEndPos();
-    const contents = try allocator.alloc(u8, file_size);
-    defer allocator.free(contents);
+    var read_buf: [1024]u8 = undefined;
+    var file_reader = file.reader(io, &read_buf).interface;
+    const contents = file_reader.buffered();
 
-    _ = try file.readAll(contents);
     var split_contents = std.mem.splitSequence(u8, contents, "\n");
     const key = try std.mem.concat(allocator, u8, &.{ data.path, data.name });
     defer allocator.free(key);
-    var next_data = std.ArrayList([]const u8){};
+    var next_data: std.ArrayList([]const u8) = .empty;
     defer next_data.deinit(allocator);
 
     const connected_u8: u8 = @intFromBool(connected);
-    const time = std.time.milliTimestamp();
+    const time = std.Io.Timestamp.now(io, .real).toMilliseconds();
+
     var buf: [40]u8 = undefined;
     const connected_str = try std.fmt.bufPrint(&buf, "{}{}", .{ connected_u8, time });
     const value = try std.mem.concat(allocator, u8, &.{ key, connected_str });
@@ -230,31 +228,34 @@ fn write_data(allocator: std.mem.Allocator, data: Result, connected: bool) !void
         try next_data.append(allocator, value);
     }
 
-    try file.seekTo(0);
+    file.close(io);
+
+    const write_file = try std.Io.Dir.cwd().createFile(io, tmp_dir, .{});
+    defer write_file.close(io);
+
+    var write_buf: [1024]u8 = undefined;
+    var file_writer = write_file.writer(io, &write_buf);
+    const writer = &file_writer.interface;
     for (next_data.items) |line| {
         if (line.len > 0) {
-            _ = try file.write(line);
-            _ = try file.write("\n");
+            try writer.print("{s}\n", .{line});
         }
     }
+    try writer.flush();
 }
 
-fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
+// Mutates environ_map by setting KUBECONFIG — not safe to call with different paths in the same process.
+fn can_connect(io: std.Io, allocator: std.mem.Allocator, path: []const u8, environ_map: *std.process.Environ.Map) !bool {
     const argv = [4][]const u8{ "kubectl", "version", "-o", "json" };
-    var env_map = std.process.EnvMap.init(allocator);
-    defer env_map.deinit();
-    // std.debug.print("path: {s}\n", .{path});
 
-    try env_map.put("KUBECONFIG", path);
+    try environ_map.put("KUBECONFIG", path);
 
-    const home = std.posix.getenv("HOME");
+    const home = environ_map.get("HOME") orelse return error.NoPath;
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, io, .{
         .argv = &argv,
-        .cwd = home,
-        .env_map = @constCast(&env_map),
-        .max_output_bytes = 1024 * 1024, // 1MB max output
+        .cwd = std.process.Child.Cwd{ .path = home },
+        .environ_map = environ_map,
     }) catch |err| {
         std.debug.print("Failed to run kubectl: {}\n", .{err});
         return err;
@@ -263,9 +264,7 @@ fn can_connect(allocator: std.mem.Allocator, path: []const u8) !bool {
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    // std.debug.print("term: {}\nstderr: {s}\n stdout: {s}\n", .{ result.term, result.stderr, result.stdout });
-
-    if (result.term.Exited != 0) {
+    if (result.term.exited != 0) {
         return false;
     }
 
@@ -385,33 +384,30 @@ test "Correct args for cluster validate have being set" {
 }
 
 fn help_string() []const u8 {
-    const str =
-        \\ usage: cluster_ping command kubeconfig cluster seconds
-        \\
-        \\ Check if current kube user can ping the current cluster
-        \\ 
-        \\ positional arguments:
-        \\   command     which task to do check|validate
-        \\   kubeconfig  path to kubeconfig file
-        \\   cluster     name of cluster to ping
-        \\   seconds     Time for valid check, default 300
+    return
+    \\ usage: cluster_ping command kubeconfig cluster seconds
+    \\
+    \\ Check if current kube user can ping the current cluster
+    \\ 
+    \\ positional arguments:
+    \\   command     which task to do check|validate
+    \\   kubeconfig  path to kubeconfig file
+    \\   cluster     name of cluster to ping
+    \\   seconds     Time for valid check, default 300
     ;
-
-    return str;
 }
 
-fn exit_if_running(allocator: std.mem.Allocator, result: Result) !void {
-    const seperator = " ";
-    const total_len = result.path.len + result.name.len + seperator.len;
+fn exit_if_running(io: std.Io, allocator: std.mem.Allocator, result: Result) !void {
+    const separator = " ";
+    const total_len = result.path.len + result.name.len + separator.len;
     const data = try allocator.alloc(u8, total_len);
     defer allocator.free(data);
 
     @memcpy(data[0..result.path.len], result.path);
-    @memcpy(data[result.path.len .. result.path.len + seperator.len], seperator);
-    @memcpy(data[result.path.len + seperator.len ..], result.name);
-    // @memcpy(data[result.path.len + seperator.len ..], result.name);
+    @memcpy(data[result.path.len .. result.path.len + separator.len], separator);
+    @memcpy(data[result.path.len + separator.len ..], result.name);
 
-    const resp = try findProcessLinux(allocator, data);
+    const resp = try findProcessLinux(io, allocator, data);
     if (resp) |process_list| {
         var list = process_list;
         defer {
@@ -427,14 +423,16 @@ fn exit_if_running(allocator: std.mem.Allocator, result: Result) !void {
     }
 }
 
-fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std.ArrayList(ProcessInfo) {
-    var proc_dir = try std.fs.openDirAbsolute("/proc", .{ .iterate = true });
-    defer proc_dir.close();
+fn findProcessLinux(io: std.Io, allocator: std.mem.Allocator, target_args: []const u8) !?std.ArrayList(ProcessInfo) {
+    var proc_dir = try std.Io.Dir.openDirAbsolute(io, "/proc", .{ .iterate = true });
+    defer proc_dir.close(io);
 
-    var process_list = std.ArrayList(ProcessInfo){};
+    var buf: [4096]u8 = undefined;
+
+    var process_list: std.ArrayList(ProcessInfo) = .empty;
 
     var iter = proc_dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io)) |entry| {
         if (entry.kind != .directory) continue;
 
         // Check if directory name is numeric (PID)
@@ -444,14 +442,15 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
         const cmdline_path = try std.fmt.allocPrint(allocator, "/proc/{d}/cmdline", .{pid});
         defer allocator.free(cmdline_path);
 
-        const cmdline_file = std.fs.openFileAbsolute(cmdline_path, .{}) catch continue;
-        defer cmdline_file.close();
+        const cmdline_file = std.Io.Dir.openFileAbsolute(io, cmdline_path, .{}) catch continue;
+        defer cmdline_file.close(io);
 
-        const cmdline_data = cmdline_file.readToEndAlloc(allocator, 4096) catch continue;
+        var cmdline_file_reader = cmdline_file.reader(io, &buf).interface;
+        const cmdline_data = cmdline_file_reader.buffered();
         defer allocator.free(cmdline_data);
 
         // Convert null-separated arguments to space-separated
-        var args_list = std.ArrayList(u8){};
+        var args_list: std.ArrayList(u8) = .empty;
         defer args_list.deinit(allocator);
 
         for (cmdline_data, 0..) |byte, i| {
@@ -473,10 +472,11 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
             const comm_path = try std.fmt.allocPrint(allocator, "/proc/{d}/comm", .{pid});
             defer allocator.free(comm_path);
 
-            const comm_file = std.fs.openFileAbsolute(comm_path, .{}) catch continue;
-            defer comm_file.close();
+            const comm_file = std.Io.Dir.openFileAbsolute(io, comm_path, .{}) catch continue;
+            defer comm_file.close(io);
 
-            const comm_data = comm_file.readToEndAlloc(allocator, 256) catch continue;
+            var comm_file_reader = comm_file.reader(io, &buf).interface;
+            const comm_data = comm_file_reader.buffered();
             defer allocator.free(comm_data);
 
             // Remove trailing newline
@@ -497,10 +497,10 @@ fn findProcessLinux(allocator: std.mem.Allocator, target_args: []const u8) !?std
     return process_list;
 }
 
-fn read_kube_config(allocator: std.mem.Allocator, data: Result) !struct { parsed: std.json.Parsed(KubeConfig), json_data: []const u8 } {
-    try std.fs.cwd().access(data.path, .{});
+fn read_kube_config(io: std.Io, allocator: std.mem.Allocator, data: Result) !struct { parsed: std.json.Parsed(KubeConfig), json_data: []const u8 } {
+    try std.Io.Dir.cwd().access(io, data.path, .{});
 
-    const json_data = convertYamlToJson(allocator, data.path) catch |err| {
+    const json_data = convertYamlToJson(io, allocator, data.path) catch |err| {
         std.debug.print("Failed to convert YAML to JSON: {}\n", .{err});
         return err;
     };
@@ -513,24 +513,21 @@ fn read_kube_config(allocator: std.mem.Allocator, data: Result) !struct { parsed
     return .{ .parsed = parsed, .json_data = json_data };
 }
 
-fn convertYamlToJson(allocator: std.mem.Allocator, yaml_file_path: []const u8) ![]const u8 {
+fn convertYamlToJson(io: std.Io, allocator: std.mem.Allocator, yaml_file_path: []const u8) ![]const u8 {
     const yq_args = [4][]const u8{ "yq", "eval", "-o=json", yaml_file_path };
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, io, .{
         .argv = &yq_args,
-        .cwd = null,
-        .env_map = null,
-        .max_output_bytes = 1024 * 1024, // 1MB max output
     }) catch |err| {
         std.debug.print("Failed to run yq: {}\n", .{err});
         return err;
     };
+
     errdefer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
-        std.debug.print("yq command failed with exit code: {}\n", .{result.term.Exited});
+    if (result.term.exited != 0) {
+        std.debug.print("yq command failed with exit code: {}\n", .{result.term.exited});
         std.debug.print("stderr: {s}\n", .{result.stderr});
         return MyError.YqCommandFailed;
     }
